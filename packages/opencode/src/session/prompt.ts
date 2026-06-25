@@ -1284,6 +1284,20 @@ const layer = Layer.effect(
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
 
+            if (handle.emptyContentRetry) {
+              const userMsg = msgs.findLast((m) => m.info.role === "user")
+              if (userMsg) {
+                yield* sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: userMsg.info.id,
+                  sessionID: userMsg.info.sessionID,
+                  type: "text",
+                  text: "<system-reminder>Your previous response contained reasoning but no text output. Please provide your answer.</system-reminder>",
+                  synthetic: true,
+                })
+              }
+            }
+
             if (structured !== undefined) {
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"

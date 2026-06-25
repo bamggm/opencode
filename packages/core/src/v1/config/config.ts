@@ -182,6 +182,9 @@ export const Info = Schema.Struct({
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
+      retry_on_empty_content: Schema.optional(Schema.Boolean).annotate({
+        description: "Retry when the model produces reasoning but no text output and no tool calls",
+      }),
     }),
   ),
 }).annotate({ identifier: "Config" })

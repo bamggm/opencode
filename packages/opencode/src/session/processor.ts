@@ -45,6 +45,7 @@ export interface Handle {
     },
   ) => Effect.Effect<void>
   readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
+  readonly emptyContentRetry: boolean
 }
 
 type Input = {
@@ -72,6 +73,9 @@ interface ProcessorContext extends Input {
   needsCompaction: boolean
   currentText: SessionV1.TextPart | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
+  hadReasoning: boolean
+  hadText: boolean
+  emptyContentRetry: boolean
 }
 
 type StreamEvent = LLMEvent
@@ -111,6 +115,9 @@ const layer = Layer.effect(
         needsCompaction: false,
         currentText: undefined,
         reasoningMap: {},
+        hadReasoning: false,
+        hadText: false,
+        emptyContentRetry: false,
       }
       let aborted = false
 
@@ -277,6 +284,7 @@ const layer = Layer.effect(
         switch (value.type) {
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return
+            ctx.hadReasoning = true
             ctx.reasoningMap[value.id] = {
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,
@@ -431,6 +439,18 @@ const layer = Layer.effect(
             return
 
           case "step-finish": {
+            // Detect reasoning-only output for automatic retry on empty content.
+            const cfg = yield* config.get()
+            if (
+              cfg.experimental?.retry_on_empty_content &&
+              ctx.hadReasoning &&
+              !ctx.hadText &&
+              Object.keys(ctx.toolcalls).length === 0 &&
+              value.reason === "stop"
+            ) {
+              ctx.emptyContentRetry = true
+            }
+
             const completedSnapshot = yield* snapshot.track()
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
             const usage = Session.getUsage({
@@ -438,7 +458,9 @@ const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
-            ctx.assistantMessage.finish = value.reason
+            if (!ctx.emptyContentRetry) {
+              ctx.assistantMessage.finish = value.reason
+            }
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
             yield* session.updatePart({
@@ -482,6 +504,7 @@ const layer = Layer.effect(
           }
 
           case "text-start":
+            ctx.hadText = true
             ctx.currentText = {
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,
@@ -687,6 +710,9 @@ const layer = Layer.effect(
         updateToolCall,
         completeToolCall,
         process,
+        get emptyContentRetry() {
+          return ctx.emptyContentRetry
+        },
       } satisfies Handle
     })
 
