@@ -1,0 +1,67 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # Trigger on version tags like v1.0.0
+  workflow_dispatch:   # Allow manual trigger from the Actions tab
+
+permissions:
+  contents: write      # Required to create releases and upload assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest   # Linux x64 runner, same as oven/bun:1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git python3 build-essential npm
+          sudo npm install -g node-gyp
+
+      - name: Install project dependencies
+        working-directory: packages/opencode
+        run: bun install
+
+      - name: Build standalone binary
+        working-directory: packages/opencode
+        env:
+          OPENCODE_CHANNEL: latest
+        run: bun run script/build.ts --single --skip-embed-web-ui
+
+      - name: Locate built binary
+        id: find_binary
+        run: |
+          # Adjust the search path if the binary is emitted elsewhere.
+          BINARY_PATH=$(find packages/opencode -name "opencode" -type f -executable | head -n 1)
+          if [ -z "$BINARY_PATH" ]; then
+            echo "::error::Binary not found! Check the build output."
+            exit 1
+          fi
+          echo "binary_path=$BINARY_PATH" >> $GITHUB_OUTPUT
+          echo "Found binary at: $BINARY_PATH"
+
+      - name: Upload artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-linux-x64
+          path: ${{ steps.find_binary.outputs.binary_path }}
+
+      - name: Create Release and Upload Asset (tag pushes)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find_binary.outputs.binary_path }}
+          generate_release_notes: true
+          # Optional: rename the asset for clarity
+          # asset_name: opencode-linux-x64
